@@ -46,11 +46,40 @@ class ButtonView(discord.ui.View):
         style=discord.ButtonStyle.red
     )
     async def leave_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await interaction.response.send_message("仔見~")
         await self.music_cog.dc(interaction)
+        await interaction.response.send_message("仔見~")
+        
     
 
 
+class MusicSelect(discord.ui.Select):
+    def __init__(self,results,cog,ctx):
+        self.results=results
+        self.music_cog=cog
+        self.ctx=ctx
+        options=[
+            discord.SelectOption(label=result["title"][:100],
+                                 description=f"{result['duration']}" if result['duration'] else "未知時長",
+                                 value=result["url"])
+            for result in results
+        ]
+
+        super().__init__(placeholder="請選擇一個搜索結果...",options=options)
+
+    async def callback(self,interaction:discord.Interaction):
+        selected_url=self.values[0]
+        selected_title=next((r['title'] for r in self.results if r["url"]==selected_url),"未知影片")
+
+        self.disabled=True
+        await interaction.message.edit(view=self.view)
+        await interaction.response.send_message(f"🎵 你選擇了 **{selected_title}**\n🔗 {selected_url}",ephemeral=True)
+        await self.music_cog.play(self.ctx,query=selected_url)
+        
+
+class MusicView(discord.ui.View):
+    def __init__(self,results,cog,ctx):
+        super().__init__()
+        self.add_item(MusicSelect(results,cog,ctx))
 
 class music_cog(commands.Cog):
     def __init__(self, bot):
@@ -63,6 +92,7 @@ class music_cog(commands.Cog):
         self.original_link=[]
         self.rcmd_or_norm=False
         self.first_time_come_in=True
+        self.is_from_search_and_play=False
     
 
     def search_yt(self, item):
@@ -109,7 +139,7 @@ class music_cog(commands.Cog):
                 return []
 
     async def call_rcmd_list(self, ctx):
-        """不再馬上啟動推薦，而是只改變自動推薦的開關狀態"""
+        """非馬上啟動推薦，而是只改變自動推薦的開關狀態"""
         if not self.rcmd_or_norm:
             await ctx.followup.send("自動推薦模式......啓動！！！！")
             self.rcmd_or_norm = True
@@ -237,6 +267,9 @@ class music_cog(commands.Cog):
         else:
             self.is_playing = False
 
+        if len(self.music_queue)==0:
+            self.original_link.clear()
+
     async def async_recommend_next_song(self):
         """异步获取推荐歌曲，并补充到队列中"""
         songs = await self.get_rcmd_list()  # 获取推荐的歌曲
@@ -253,10 +286,11 @@ class music_cog(commands.Cog):
 
 
 
-    @commands.hybrid_command(help="Plays a selected song from YouTube or a playlist")
+    @commands.hybrid_command(help="使用YouTube鏈接🔗來播放")
     async def play(self, ctx: commands.Context, query: str):
-        await ctx.defer()
-        
+        if not self.is_from_search_and_play:
+            await ctx.defer()
+        self.is_from_search_and_play=False
         # 检查用户是否在语音频道
         try:
             voice_channel = ctx.author.voice.channel
@@ -316,7 +350,6 @@ class music_cog(commands.Cog):
 
         with YoutubeDL(ydl_opts) as ydl:
             info = ydl.extract_info(f"ytsearch5:{query}", download=False)
-            # print(info)  # Debug: 看看返回的內容
 
             # 確保 entries 存在
             if 'entries' in info:
@@ -328,8 +361,19 @@ class music_cog(commands.Cog):
             else:
                 return []
 
+
     @commands.hybrid_command(help="搜索 YouTube 並返回結果列表")
-    async def search(self, ctx, *, query: str):
+    async def search(self,ctx,*,query:str):
+        results=self.search_yt_text(query)
+        if not results:
+            await ctx.send("未找到任何結果，請嘗試其他關鍵字！")
+            return
+        self.is_from_search_and_play=True
+        view=MusicView(results,self,ctx)
+        await ctx.send("🔎 搜索結果：", view=view)
+
+    @commands.hybrid_command(help="搜索 YouTube 並返回結果列表")
+    async def searchlink(self, ctx, *, query: str):
         results = self.search_yt_text(query)
         if not results:
             await ctx.send("未找到任何結果，請嘗試其他關鍵詞！")
