@@ -1,37 +1,44 @@
-import os
 import discord
 from discord.ext import commands
-from dcbot0 import music_cog,MusicView
-
-class MyBot(commands.Bot):
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-
-    async def setup_hook(self):
-        await self.add_cog(music_cog(self))
-        synced = await self.tree.sync()
-        # print(f"Synced commands: {synced}")
-
+import os
+from dcbot0 import MusicCog, MusicView
 
 intents = discord.Intents.default()
 intents.message_content = True
-intents.guilds = True  # 確保這個 intents 被啟用
+intents.guilds = True
+intents.voice_states = True  # ⚠️ 播放音樂需要
 
-bot = MyBot(command_prefix="!", intents=intents)
+# 使用 commands.Bot 支援 slash command
+bot = commands.Bot(command_prefix='!', intents=intents)
 
-@bot.command()
-async def 選單(ctx):
-    await ctx.send("請選擇一個選項：",view=MusicView())
+# ----- Ping 測試指令 -----
+@bot.tree.command(name="ping", description="檢查機器人延遲")
+async def ping(interaction: discord.Interaction):
+    await interaction.response.send_message(f"Pong! Latency: {bot.latency*1000:.0f}ms")
+
+# ----- 顯示音樂選單 (測試用) -----
+@bot.tree.command(name="選單", description="顯示音樂選單")
+async def 選單(interaction: discord.Interaction):
+    # 這裡傳空的 MusicView，如果你要帶 search 結果，可改傳 MusicView(results, cog, interaction)
+    await interaction.response.send_message("請選擇一個選項：", view=MusicView([], None, interaction))
+
+# ----- 載入 Cog -----
+@bot.event
+async def on_ready():
+    print(f"✅ Logged in as {bot.user} (ID: {bot.user.id})")
+    music_cog = MusicCog(bot)
+    await bot.add_cog(music_cog)
+    print("✅ MusicCog loaded")
+    
+    # 同步 slash commands (app_commands)
+    try:
+        synced = await bot.tree.sync()
+        print(f"✅ Slash commands synced: {len(synced)} commands")
+    except Exception as e:
+        print(f"❌ Error syncing commands: {e}")
+    
+    print("✅ Bot is ready! Slash commands should be available shortly.")
 
 
-@bot.command()
-@commands.has_permissions(administrator=True)
-async def synccommands(ctx):
-    await bot.tree.sync()
-    await ctx.send("Sync successful!")
-
-# @bot.hybrid_command(name="add", description="Add two numbers")
-# async def add(ctx, a: int, b: int):
-#     await ctx.send(a + b)
-
-bot.run("")
+# ----- 啟動 Bot -----
+bot.run("DISCORDBOTTOKEN")
