@@ -41,4 +41,4 @@ async def on_ready():
 
 
 # ----- 啟動 Bot -----
-bot.run("DISCORDBOTTOKEN")
+bot.run("DISCORDBOT_TOKEN")

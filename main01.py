@@ -1,76 +1,29 @@
 import discord
 from discord.ext import commands
-from yt_dlp import YoutubeDL
-import asyncio
+
+from dcbot0 import MusicCog  # 確保 dcbot0.py 與本檔案在同一資料夾
+
 
 intents = discord.Intents.default()
 intents.message_content = True
+
+# 只負責建立 Bot 實例，不在這裡定義任何指令
 bot = commands.Bot(command_prefix='>', intents=intents)
 
-@bot.hybrid_command()
-async def play(ctx, query: str):
-    await ctx.defer()
-    original_link = []
-    songs = await search_yt(query, original_link)
-    if not songs:
-        await ctx.send('未找到任何有效的音樂或播放列表。')
-        return
 
-    if not self.is_playing:
-        self.music_queue = songs
-        await ctx.send('已加入到播放列表，開始播放 🎶')
-        await self.play_music(ctx)
+@bot.event
+async def setup_hook():
+    """啟動時載入 Cog 並同步 application commands（slash / app_commands）。"""
+    await bot.add_cog(MusicCog(bot))
+    synced = await bot.tree.sync()
+    print(f"✅ Synced {len(synced)} application commands")
 
 
-
-    await ctx.send('pong')
-
-
-async def search_yt(url: str, original_link: list):
-    ydl_opts = {
-        'format': 'bestaudio/best',
-        'forceurl': True,
-        'playlistend': '5',
-        'extract_flat': 'in_playlist',
-        'quiet': True,
-        'noplaylist': False,
-        'socket_timeout': 30,
-    }
-
-    def _extract_info_sync(url):
-        ydl = YoutubeDL(ydl_opts)
-        try:
-            return ydl.extract_info(url, download=False)
-        finally:
-            ydl.close()
-
-    try:
-        # 先抓主資訊
-        info = await asyncio.to_thread(_extract_info_sync, url)
-
-        # ▶ playlist
-        if 'entries' in info and info['entries'] is not None:
-            playlist_videos = []
-            for entry in info['entries']:
-                original_link.append(entry['url'])
-                list_info = await asyncio.to_thread(_extract_info_sync, entry['url'])
-                playlist_videos.append({
-                    'source': list_info['url'],
-                    'title': list_info['title']
-                })
-            return playlist_videos
-        
-        # ▶ 單支影片
-        else:
-            original_link.append(f"https://www.youtube.com/watch?v={info['id']}")
-            return [{
-                'source': info['url'],
-                'title': info['title']
-            }]
-
-    except Exception as e:
-        print(f"Error downloading YouTube video: {e}")
-        return []
+@bot.event
+async def on_ready():
+    print(f"✅ Logged in as {bot.user} (ID: {bot.user.id})")
 
 
-bot.run('DISCORDBOTTOKEN')
+if __name__ == "__main__":
+    # TODO: 把下面的 'YOUR_BOT_TOKEN_HERE' 換成你的真實 Bot Token
+    bot.run("DISCORDBOT_TOKEN")
