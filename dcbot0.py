@@ -129,6 +129,7 @@ class MusicCog(commands.Cog):
             'quiet': True,
             'noplaylist': False,
             'socket_timeout': 30,
+            'cookies': 'cookies.txt',
         }
         
         def _extract_info_sync(url):
@@ -174,6 +175,7 @@ class MusicCog(commands.Cog):
             'no_warnings': True,
             'default_search': 'ytsearch5:',  # 搜索前5个结果
             'socket_timeout': 30,
+            'cookies': 'cookies.txt',
         }
         
         def _search_sync(search_query):
@@ -388,6 +390,7 @@ class MusicCog(commands.Cog):
             'extract_flat': 'in_playlist',
             'quiet': True,
             'socket_timeout': 30,
+            'cookies': 'cookies.txt',
         }
 
         async def extract_info_async(url):
