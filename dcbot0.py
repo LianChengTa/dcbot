@@ -3,6 +3,10 @@ from yt_dlp import YoutubeDL
 import asyncio
 import discord
 from discord import app_commands
+import os
+import re
+from googleapiclient.discovery import build
+from googleapiclient.errors import HttpError
 
 # ----------------- Button 按鈕 -----------------
 class ButtonView(discord.ui.View):
@@ -80,6 +84,13 @@ class MusicCog(commands.Cog):
         self.rcmd_or_norm = False
         self.force_stop = False
         self.current_interaction = None
+        # 初始化 YouTube Data API v3
+        api_key = os.getenv('YOUTUBE_API_KEY')
+        if api_key:
+            self.youtube_api = build('youtube', 'v3', developerKey=api_key)
+        else:
+            print("⚠️ 警告: 未設置 YOUTUBE_API_KEY 環境變數，將無法使用 YouTube Data API v3 搜尋")
+            self.youtube_api = None
 
     # ----------------- send_message -----------------
     async def send_message(self, interaction, content=None, embed=None, view=None, ephemeral=False):
@@ -119,8 +130,62 @@ class MusicCog(commands.Cog):
             else:
                 print("⚠️ 無法送出訊息，連 channel 都沒有")
 
-    # ----------------- YouTube 搜索 -----------------
+    # ----------------- YouTube 搜索（處理 URL）-----------------
     async def search_yt(self, item):
+        # 如果輸入是 URL，先嘗試從 URL 提取視頻 ID
+        video_id_match = re.search(r'(?:v=|\/)([0-9A-Za-z_-]{11}).*', item)
+        playlist_id_match = re.search(r'[&?]list=([^&]+)', item)
+        
+        # 如果是單個視頻 URL 且有 API，嘗試使用 API 獲取信息
+        if video_id_match and not playlist_id_match and self.youtube_api:
+            video_id = video_id_match.group(1)
+            try:
+                # 使用 API 獲取視頻信息
+                def _get_video_info_api(vid_id):
+                    request = self.youtube_api.videos().list(
+                        part='snippet,contentDetails',
+                        id=vid_id
+                    )
+                    response = request.execute()
+                    return response.get('items', [])
+                
+                api_items = await asyncio.to_thread(_get_video_info_api, video_id)
+                
+                if api_items:
+                    # API 成功獲取信息，但仍需要使用 yt-dlp 獲取流 URL
+                    video_info = api_items[0]
+                    title = video_info['snippet']['title']
+                    
+                    # 使用 yt-dlp 獲取實際的流 URL
+                    ydl_opts = {
+                        'format': 'bestaudio/best',
+                        'forceurl': True,
+                        'quiet': True,
+                        'socket_timeout': 30,
+                        'cookies': 'cookies.txt',
+                    }
+                    
+                    def _get_stream_url(url):
+                        ydl = YoutubeDL(ydl_opts)
+                        try:
+                            info = ydl.extract_info(url, download=False)
+                            return info.get('url', '')
+                        finally:
+                            ydl.close()
+                    
+                    stream_url = await asyncio.to_thread(_get_stream_url, item)
+                    if stream_url:
+                        new_link = f"https://www.youtube.com/watch?v={video_id}"
+                        if not self.is_playing:
+                            self.original_link = [new_link]
+                        else:
+                            self.original_link.append(new_link)
+                        return [{'source': stream_url, 'title': title}]
+            except Exception as e:
+                print(f"API 獲取視頻信息失敗，回退到 yt-dlp: {e}")
+                # 繼續使用 yt-dlp 處理
+        
+        # 回退到使用 yt-dlp（處理播放列表或 API 失敗的情況）
         ydl_opts = {
             'format': 'bestaudio/best',
             'forceurl': True,
@@ -167,8 +232,63 @@ class MusicCog(commands.Cog):
             print(f"Error downloading YouTube video: {e}")
             return []
 
-    # 添加搜索文本的方法（searchlink命令需要使用）
+    # 添加搜索文本的方法（使用 YouTube Data API v3）
     async def search_yt_text(self, query):
+        # 如果沒有 API key，回退到 yt-dlp
+        if not self.youtube_api:
+            return await self._search_yt_text_fallback(query)
+        
+        try:
+            # 使用 YouTube Data API v3 進行搜索
+            def _search_api_sync(search_query):
+                request = self.youtube_api.search().list(
+                    part='snippet',
+                    q=search_query,
+                    type='video',
+                    maxResults=5,
+                    order='relevance'
+                )
+                search_response = request.execute()
+                
+                # 獲取視頻詳細信息（包括時長）
+                video_ids = [item['id']['videoId'] for item in search_response.get('items', [])]
+                if not video_ids:
+                    return []
+                
+                videos_request = self.youtube_api.videos().list(
+                    part='contentDetails,snippet',
+                    id=','.join(video_ids)
+                )
+                videos_response = videos_request.execute()
+                
+                results = []
+                for item in videos_response.get('items', []):
+                    video_id = item['id']
+                    title = item['snippet']['title']
+                    duration_iso = item['contentDetails']['duration']  # ISO 8601 格式
+                    duration_str = self._parse_duration(duration_iso)
+                    
+                    results.append({
+                        'title': title,
+                        'url': f"https://www.youtube.com/watch?v={video_id}",
+                        'duration': duration_str
+                    })
+                
+                return results
+            
+            results = await asyncio.to_thread(_search_api_sync, query)
+            return results
+        except HttpError as e:
+            print(f"YouTube API error: {e}")
+            # API 失敗時回退到 yt-dlp
+            return await self._search_yt_text_fallback(query)
+        except Exception as e:
+            print(f"Search error: {e}")
+            # 發生錯誤時回退到 yt-dlp
+            return await self._search_yt_text_fallback(query)
+    
+    # 回退方法：使用 yt-dlp 進行搜索（當 API 不可用時）
+    async def _search_yt_text_fallback(self, query):
         ydl_opts = {
             'format': 'bestaudio/best',
             'quiet': True,
@@ -196,8 +316,38 @@ class MusicCog(commands.Cog):
                 })
             return results
         except Exception as e:
-            print(f"Search error: {e}")
+            print(f"Search error (fallback): {e}")
             return []
+    
+    # 解析 ISO 8601 時長格式為可讀字符串
+    def _parse_duration(self, duration_iso):
+        """將 ISO 8601 時長格式 (PT1H2M10S) 轉換為可讀格式"""
+        import re
+        duration_str = duration_iso.replace('PT', '')
+        hours = 0
+        minutes = 0
+        seconds = 0
+        
+        # 提取小時
+        hour_match = re.search(r'(\d+)H', duration_str)
+        if hour_match:
+            hours = int(hour_match.group(1))
+        
+        # 提取分鐘
+        minute_match = re.search(r'(\d+)M', duration_str)
+        if minute_match:
+            minutes = int(minute_match.group(1))
+        
+        # 提取秒數
+        second_match = re.search(r'(\d+)S', duration_str)
+        if second_match:
+            seconds = int(second_match.group(1))
+        
+        # 格式化輸出
+        if hours > 0:
+            return f"{hours}:{minutes:02d}:{seconds:02d}"
+        else:
+            return f"{minutes}:{seconds:02d}"
 
     # ----------------- 播放控制 -----------------
     async def play_music(self, interaction: discord.Interaction):
